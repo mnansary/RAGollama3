@@ -1,0 +1,6 @@
+streamlit==1.37.1
+langchain==0.2.14
+langchain-community==0.2.12
+sentence-transformers==3.0.1
+ipykernel
+chromadb==0.5.5
