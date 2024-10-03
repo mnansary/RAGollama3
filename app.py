@@ -3,7 +3,6 @@ import os
 import time
 
 from langchain.prompts import PromptTemplate
-from langchain.memory import ConversationBufferMemory
 from langchain_community.vectorstores import Chroma
 from langchain_community.llms import Ollama
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
@@ -12,35 +11,30 @@ from langchain.chains import RetrievalQA
 from embedding import CustomEmbeddings
 from config import *
 
-# add embedding function
+# Add embedding function
 if "embedding_model" not in st.session_state:
-    st.session_state.embedding_model=CustomEmbeddings(EMBEDDING_MODEL)
+    st.session_state.embedding_model = CustomEmbeddings(EMBEDDING_MODEL)
 
 # Ensure directories exist
 if not os.path.exists(VECTOR_DB_PATH):
     st.error("Vector store directory not found. Please run the preprocessing script.")
 
-# Initialize session state
+# Initialize session state for prompt template (without history)
 if 'template' not in st.session_state:
-    st.session_state.template = """You are a knowledgeable chatbot, here to help with questions of the user. 
-                                   Your tone should be professional and informative.
-                                   তুমি সব সময় বাংলায় উত্তর দেবে
-                                   Context: {context}
-                                   History: {history}
-                                   User: {question}
-                                   Chatbot:"""
+    st.session_state.template = """You are a knowledgeable chatbot, designed to assist users with their inquiries in a detailed and informative manner. 
+                                Your responses should not only answer the user's questions but also provide additional context, relevant examples, and insights related to the topic at hand. 
+                                Ensure your tone is professional, yet approachable, and remember to communicate in Bengali (বাংলা).
+
+                                Context: {context}
+
+                                User: {question}
+                                Chatbot: Please provide a thorough response, including any relevant details or explanations that might help the user better understand the topic.
+                                """
 
 if 'prompt' not in st.session_state:
     st.session_state.prompt = PromptTemplate(
-        input_variables=["history", "context", "question"],
+        input_variables=["context", "question"],  # Expect "query" instead of "question"
         template=st.session_state.template,
-    )
-
-if 'memory' not in st.session_state:
-    st.session_state.memory = ConversationBufferMemory(
-        memory_key="history",
-        return_messages=True,
-        input_key="question",
     )
 
 # Initialize vectorstore and LLM
@@ -58,14 +52,16 @@ if 'llm' not in st.session_state:
         callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),
     )
 
+# Initialize chat history
 if 'chat_history' not in st.session_state:
     st.session_state.chat_history = []
 
 st.title("Chatbot - to talk to your Database")
 
 # Initialize retriever
-st.session_state.retriever = st.session_state.vectorstore.as_retriever()
+st.session_state.retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 1})
 
+# Initialize QA chain without memory, only retrieving context
 if 'qa_chain' not in st.session_state:
     st.session_state.qa_chain = RetrievalQA.from_chain_type(
         llm=st.session_state.llm,
@@ -75,7 +71,6 @@ if 'qa_chain' not in st.session_state:
         chain_type_kwargs={
             "verbose": True,
             "prompt": st.session_state.prompt,
-            "memory": st.session_state.memory,
         }
     )
     
@@ -95,18 +90,15 @@ if user_input := st.chat_input("You:", key="user_input"):
     with st.chat_message("user"):
         st.markdown(user_input)
 
+    # Get the response from the QA chain (only based on retrieved context)
     with st.chat_message("assistant"):
         with st.spinner("Assistant is typing..."):
             response = st.session_state.qa_chain(user_input)
         message_placeholder = st.empty()
-        full_response =response['result']
-        # for chunk in response['result'].split():
-        #     full_response += chunk + " "
-        #     time.sleep(0.05)
-        #     message_placeholder.markdown(full_response + "▌")
+        full_response = response['result']
         message_placeholder.markdown(full_response)
 
-    chatbot_message = {"role": "assistant", "message": response['result']}
+    chatbot_message = {"role": "assistant", "message": full_response}
     st.session_state.chat_history.append(chatbot_message)
 else:
-    st.write("Please enter your query to start the chatbot")
+    st.write("Please enter your query to start the chatbot.")

@@ -9,6 +9,11 @@ RAG implementation with ollama 3.1 70B
 
     * for linux : ```curl -fsSL https://ollama.com/install.sh | sh```
 
+* open a terminal and serve ollama
+
+```bash
+ollama serve
+```
 * open a terminal and run ollama3.1: 70B model and keep it running 
 
 ```bash
@@ -22,7 +27,7 @@ ollama run llama3.1:70b
 * create a python environment 
 
 ```bash
-conda create -n ragollama python=3.9
+conda create -n ragollama python=3.10
 ```
 
 * activate your environment
