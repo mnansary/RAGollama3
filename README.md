@@ -60,7 +60,7 @@ MODEL_NAME="llama3.1:70b"
 MODEL_BASE_URL='http://localhost:11434'  
 
 # The model to use in sentence-transformers for creation embedding
-EMBEDDING_MODEL="l3cube-pune/bengali-sentence-bert-nli" 
+EMBEDDING_MODEL="l3cube-pune/bengali-sentence-similarity-sbert" 
 ```
 
 
