@@ -1,0 +1,77 @@
+MODEL_NAME="llama3.1:70b"       
+MODEL_BASE_URL='http://localhost:11434'
+JSON_DIR="/home/vpa/deliverables/BanQA/data/"
+SAVE_DIR="wiki_intent_dialouge/"
+import os
+import time
+from tqdm import  tqdm 
+import json
+from glob import glob
+all_jsons=[jsonf for jsonf in tqdm(glob(os.path.join(JSON_DIR,"*.json")))]
+import os
+import time
+from tqdm import  tqdm 
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain.callbacks.manager import CallbackManager
+from langchain_community.llms import Ollama
+
+template = """You are tasked with converting a set of question-answer pairs into a natural conversation format. 
+            The conversation should feel fluid, logical, and natural, as if two people are discussing the topics informally. 
+            Here an example input data:
+
+            A:বাংলা ভাষার সাথে সম্পর্কিত কোন দেশগুলির সংখ্যা কত?\n
+            B:বাংলা ভাষার সাথে সম্পর্কিত ১০টি দেশগুলির নাম হচ্ছে:\n\n           1. বাংলাদেশ\n           2. ভারত\n           3. ইউনাইটেড কিংডম\n           4. যুক্তরাষ্ট্র \n           5. পাকিস্তান\n           6. ওমান\n           7. ইন্দোনেশিয়া\n           8. ব্রুনেই\n           9. মালয়েশিয়া\n           10. সিংগাপুর\n
+            A:বাংলা ভাষার সাথে কোন ধরনের ভাষা সম্পর্কিত?\n
+            B:Indo-Aryan languages\n
+            A:বাংলা ভাষার অবস্থান কোন দেশে?\n      
+            B:পৃথিবীর জনসংখ্যা অনুযায়ী ভাষা হিসেবে মাতৃভাষা হিসেবে বক্তৃতা ও লিখিত রূপে, চতুর্থ এবং শীর্ষস্থানে অধিষ্ঠিত হয়ে বাংলা ভাষার অনন্য অবস্থান।\n 
+        
+            Your goal is to convert these into a natural conversation in Bengali(বাংলা). For example, it might look something like this:
+
+            A: বাংলা ভাষার সাথে সম্পর্কিত কোন দেশগুলির কথা শুনেছো?
+            B: বাংলা ভাষার সাথে সম্পর্কিত ১০টি দেশ আছে। যেমন: বাংলাদেশ, ভারত, ইউনাইটেড কিংডম, যুক্তরাষ্ট্র, পাকিস্তান, ওমান, ইন্দোনেশিয়া, ব্রুনেই, মালয়েশিয়া, এবং সিংগাপুর।
+            A: ওহ, বাংলা ভাষার সাথে কি ধরনের ভাষা সম্পর্কিত?
+            B: বাংলা ভাষা ইন্দো-আর্য ভাষাগুলোর একটি অংশ।
+            A: সত্যি? তাহলে বাংলা ভাষার অবস্থান সম্পর্কে কিছু বলো।
+            B: অবশ্যই! জনসংখ্যার ভিত্তিতে, বাংলা ভাষা পৃথিবীর অন্যতম বৃহৎ ভাষা। এটি মাতৃভাষা হিসেবে চতুর্থ স্থান দখল করে আছে।
+            Generate the output in a similar conversational format, ensuring the tone is friendly and informal while still conveying the original information accurately.
+
+            Now convert the following input
+            Input: {}
+            
+            """
+
+llm = Ollama(
+        base_url=MODEL_BASE_URL,
+        model=MODEL_NAME
+    )
+
+for q_file in tqdm(all_jsons):
+    with open(q_file, 'r', encoding='utf-8') as file:
+        entry = json.load(file)
+    
+    questions=entry["question"]
+    answers=entry["answer"]
+
+    input_data=""
+    for q,a in zip(questions,answers):
+        q_cleaned = q.replace("\n", "")  # Clean newline characters
+        a_cleaned = a.replace("\n", "")  # Clean newline characters
+        input_data += f'A:{q_cleaned}\nB:{a_cleaned}\n'
+    prompt=template.format(input_data)
+    conversation=llm(prompt)
+    # Initialize a dictionary to store conversation by speakers
+    conversation_dict = {"A": [], "B": []}
+
+    # Split the conversation into lines and process each line
+    for line in conversation.strip().split("\n"):
+        # Split the line into speaker and statement
+        if ": " in line:
+            speaker, statement = line.split(": ", 1)
+            if speaker in conversation_dict:
+                conversation_dict[speaker].append(statement.strip())
+    conversation_dict["input"]=input_data
+    conversation_dict["response"]=conversation
+    conversation_json = json.dumps(conversation_dict, ensure_ascii=False, indent=2)
+    with open(q_file.replace(JSON_DIR,SAVE_DIR), "w", encoding="utf-8") as file:
+        file.write(conversation_json)
