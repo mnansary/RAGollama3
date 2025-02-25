@@ -1,19 +1,30 @@
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-from typing import Generator
-from model import BanglaRAGService  # Import your BanglaRAGService class
+from flask import Flask, request, Response, jsonify
+from model import BanglaRAGService  # Assuming your BanglaRAGService is in bangla_rag_service.py
+import traceback
 
-app = FastAPI()
-rag_service = BanglaRAGService()
+app = Flask(__name__)
+rag_service = BanglaRAGService() # Initialize your RAG service
 
-@app.get("/query/")
-async def query(question: str):
-    async def event_stream() -> Generator[str, None, None]:
-        for chunk in rag_service.process_query(question):
-            yield chunk
 
-    return StreamingResponse(event_stream(), media_type="text/plain")
+@app.route('/chat', methods=['POST'])
+def chat_endpoint():
+    question = request.json.get('question')
+    if not question:
+        return jsonify({"error": "Question is required"}), 400
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3030)
+    def stream_response():
+        try:
+            for chunk in rag_service.process_query(question):
+                yield f"{chunk}\n"  # Ensure new lines for streaming clients
+                import sys
+                sys.stdout.flush()  # Force immediate flush of output
+        except Exception as e:
+            error_message = f"Backend Error: {str(e)}"
+            traceback.print_exc()
+            yield error_message + "\n"
+
+    return Response(stream_response(), mimetype='text/plain') # Or 'text/plain' if you don't want SSE
+
+
+if __name__ == '__main__':
+    app.run(debug=False, host='0.0.0.0', port=3030,threaded=True) # Run Flask app
