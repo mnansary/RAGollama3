@@ -91,21 +91,25 @@ def generate_questions_answers(context: str) -> str:
     
     return result
 
-def gen_qna(df: pd.DataFrame) -> None:
+def gen_qna(df: pd.DataFrame, save_dir: str) -> None:
     """
     Process a DataFrame of JSON file paths to generate Q&A entries and save them as JSON files.
 
     Args:
         df (pd.DataFrame): DataFrame containing a 'paths' column with JSON file paths.
+        save_dir (str): Directory to save the generated Q&A JSON files.
 
     Notes:
         - Reads JSON files, generates Q&A using the context, and saves results in a specified directory.
         - Skips existing entries to avoid duplication.
+        - Tracks and displays elapsed time for each entry.
     """
     data_count = 0  # Counter for processed entries
-    
+    questions_count=0
     # Iterate over each JSON file path in the DataFrame
     for json_path in df['paths'].tolist():
+        start_time = time.time()  # Record start time for this entry
+        
         with open(json_path, "r", encoding='utf-8') as f:
             passage = json.load(f)
         
@@ -124,24 +128,29 @@ def gen_qna(df: pd.DataFrame) -> None:
             questions: List[str] = re.findall(r"প্রশ্ন \d+: (.*?)(?:\n|$)", result)
             answers: List[str] = re.findall(r"উত্তর \d+: (.*?)(?:\n|$)", result)
             
-            # Only proceed if at least 2 questions are generated
-            if len(questions) >= 2:
+            # Only proceed if at least 5 questions are generated (as per template)
+            if len(questions) >= 5:
                 entry["id"] = _id
                 entry["title"] = passage["meta"]["title"]
                 entry["text"] = context
                 entry["question"] = questions
                 entry["answer"] = answers
                 entry["num_entries"] = len(questions)
-                
+                questions_count+=len(questions)
                 # Save the entry as a JSON file
                 with open(save_json, 'w', encoding='utf-8') as f:
                     json.dump(entry, f, ensure_ascii=False, indent=2)
                 
                 data_count += 1
-                print(f"Entry created: Count: {data_count}")
+                elapsed_time = time.time() - start_time  # Calculate elapsed time
+                print(f"Entry created: Count: {data_count}, question count:{questions_count} Elapsed Time: {elapsed_time:.2f} seconds")
         else:
             data_count += 1
-            print(f"Entry Exists: Count: {data_count}")
+            elapsed_time = time.time() - start_time  # Calculate elapsed time for skipped entry
+            with open(save_json, "r", encoding='utf-8') as f:
+                data = json.load(f)
+            questions_count+=len(data["question"])
+            print(f"Entry Exists: Count: {data_count}, question count:{questions_count} Elapsed Time: {elapsed_time:.2f} seconds")
 
 if __name__ == "__main__":
     # Load passage and Q&A ID DataFrames
@@ -160,4 +169,4 @@ if __name__ == "__main__":
     os.makedirs(save_dir, exist_ok=True)
     
     # Generate Q&A for the filtered DataFrame
-    gen_qna(df)
+    gen_qna(df,save_dir)
