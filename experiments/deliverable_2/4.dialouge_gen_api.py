@@ -117,7 +117,6 @@ if __name__ == "__main__":
     df=pd.read_csv(f"/home/vpa/RAGollama3/data/chunks/{idx}.csv")
     apis=pd.read_csv("/home/vpa/RAGollama3/data/chunks/ansary_apis.csv")
     api_key=apis["api"].tolist()[idx]
-    #api_key="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"
     # create client
     client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
