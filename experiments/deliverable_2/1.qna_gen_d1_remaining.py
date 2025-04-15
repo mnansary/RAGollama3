@@ -153,14 +153,15 @@ def gen_qna(df: pd.DataFrame, save_dir: str) -> None:
             print(f"Entry Exists: Count: {data_count}, question count:{questions_count} Elapsed Time: {elapsed_time:.2f} seconds")
 
 if __name__ == "__main__":
-    # Load passage and Q&A ID DataFrames
-    d1_passage_df: pd.DataFrame = pd.read_csv("/home/vpa/deliverables/d1_ids.csv")
-    d1_qna_df: pd.DataFrame = pd.read_csv("/home/vpa/deliverables/d1qna_ids.csv")
+    # # Load passage and Q&A ID DataFrames
+    # d1_passage_df: pd.DataFrame = pd.read_csv("/home/vpa/deliverables/d1_ids.csv")
+    # d1_qna_df: pd.DataFrame = pd.read_csv("/home/vpa/deliverables/d1qna_ids.csv")
     
-    # Filter out passages that already have Q&A entries
-    df: pd.DataFrame = d1_passage_df.loc[~d1_passage_df['pid'].isin(d1_qna_df['pid'].tolist())]
-    df.reset_index(inplace=True, drop=True)
-    
+    # # Filter out passages that already have Q&A entries
+    # df: pd.DataFrame = d1_passage_df.loc[~d1_passage_df['pid'].isin(d1_qna_df['pid'].tolist())]
+    # df.reset_index(inplace=True, drop=True)
+    idx=31
+    df=pd.read_csv(f"/home/vpa/RAGollama3/data/chunks/{idx}.csv")
     # Initialize the LLM model
     llm = Ollama(model="llama3.3", temperature=0.2, num_ctx=32768)
     
