@@ -165,3 +165,5 @@ data/*
 .idea/*
 archive/
 debug*.*
+.gradio/
+prototype
