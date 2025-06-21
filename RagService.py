@@ -6,7 +6,8 @@ from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import ChatPromptTemplate
 from sentence_transformers import SentenceTransformer
 import torch
-from config import VECTOR_DB_PATH,EMBEDDING_MODEL,MODEL_NAME
+from config import VECTOR_DB_PATH, EMBEDDING_MODEL, MODEL_NAME
+
 
 # === Custom Embedding ===
 class CustomEmbeddings:
@@ -29,7 +30,8 @@ class BanglaRAGService:
         embedding_model: str = EMBEDDING_MODEL,
         llm_model: str = MODEL_NAME,
         temperature: float = 0.0,
-        context_window_size: int = 10
+        context_window_size: int = 10,
+        summary_size:int=5
     ):
         self.embedding_model = CustomEmbeddings(embedding_model)
         self.vectorstore = Chroma(
@@ -43,48 +45,64 @@ class BanglaRAGService:
 
         self.context_window: Deque[Tuple[str, str, str]] = deque(maxlen=context_window_size)
         self.current_source_passage = None
-
+        self.summary_size = summary_size  # Number of past interactions to summarize
         self.debug_info = ""  # For displaying debug details in Gradio UI
 
         self._prepare_prompts()
-        self._invoke_llm("This is just to get you going and loading the model to make new questions faster.No need to reply anything other than OK.")
+        self._invoke_llm("This is just to get you going and loading the model to make new questions faster. No need to reply anything other than OK.")
 
     def _prepare_prompts(self) -> None:
         self.answer_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a knowledgeable chatbot. Answer the user's question in Bengali (বাংলা) using only the provided context.
+            ("system", """
+        You are a knowledgeable chatbot. Answer the user's question in Bengali (বাংলা) using only the provided context.
 
         Guidelines:
-        - Answer sufficiently.
-        - Do not rephrase or repeat the question in your answer redundantly.If it is necessary to rephrase only then do it.
-        - If you're unsure or the context is insufficient, respond exactly with 'NOT_SURE_ANSWER'."""),
-            ("user", "Context:\n{context}\n\nRewritten Question: {question}\nOriginal Question: {original}")
+        - Your tone should indicate that you are answering from your knowledge base. Do not speak as if the user already possesses the information (e.g., avoid phrases like "আপনার কাছে আছে"). Instead, present facts directly and neutrally.
+        - Answer sufficiently and concisely.
+        - Use the context and past conversation to answer the question precisely.
+        - Do not rephrase or repeat the question in your answer unnecessarily. If it is necessary to refer to the question, do so briefly.
+        - Use the context provided to answer the question.
+        - If unsure or context is insufficient, respond exactly with 'NOT_SURE_ANSWER'.
+             """),
+            ("user", "Conversation History Summary:\n{history}\n\nContext:\n{context}\n\nRewritten Question: {question}\nOriginal Question: {original}")
         ])
 
         self.rewrite_prompt = ChatPromptTemplate.from_messages([
-                ("system", """You are a helpful assistant. Based on the summary of a past conversation and a new question, 
-            decide whether the new question relates to the past conversation.
-
-            If it does, rewrite the new question to be standalone and unambiguous. 
-            Replace vague terms like "এখানে", "ওখানে", "তিনি", etc., with explicit references from the summary.
-            Make sure the rewritten question is specific enough for retrieving relevant documents from a large database.
-
-            Keep it concise, precise, and free of redundancy.
-            If the new question is unrelated, return exactly: NEW_QUES
-
-            ONLY RETURN THE REWRITTEN QUESTION. DO NOT EXPLAIN OR ADD ANY OTHER TEXT.
+            ("system", """
+            You are a helpful assistant. 
+            - Based on the summary of a past conversation and a new question, decide whether the new question relates to the past conversation.
+            - If it does, rewrite the new question to be standalone and unambiguous. 
+                - Replace vague terms like "এখানে", "ওখানে", "তিনি", etc., with explicit references from the summary.
+                - Make sure the rewritten question is specific enough for retrieving relevant documents from a large database.
+                - Keep it concise, precise, and free of redundancy.
+            - If the new question is unrelated, return exactly: NEW_QUES
+            - ONLY RETURN THE REWRITTEN QUESTION. DO NOT EXPLAIN OR ADD ANY OTHER TEXT.
 
             Examples:
 
             Summary:
-            Q: রাজশাহী কৃষি সম্প্রসারণ অধিদপ্তরের ঠিকানা কী?
-            A: রাজশাহী কৃষি সম্প্রসারণ অধিদপ্তরের ঠিকানা হলো লালন শাহ সড়ক, রাজশাহী।
+            Q1: রাজশাহী কৃষি সম্প্রসারণ অধিদপ্তরের ঠিকানা কী?
+            A1: রাজশাহী কৃষি সম্প্রসারণ অধিদপ্তরের ঠিকানা হলো লালন শাহ সড়ক, রাজশাহী।
             New Question: ওখানে সপ্তাহে কয়দিন খোলা থাকে?
             Rewritten Question: রাজশাহী কৃষি সম্প্রসারণ অধিদপ্তর সপ্তাহে কয়দিন খোলা থাকে?
 
-            Now follow the same logic:
+            Summary:
+            Q1: পদ্মা সেতুর দৈর্ঘ্য কত?
+            A1: পদ্মা সেতুর দৈর্ঘ্য ৬.১৫ কিমি।
+            Q2: এটি কবে উদ্বোধন হয়?
+            A2: ২৫ জুন ২০২২ সালে।
+            New Question: ময়মনসিংহ মেডিকেল কলেজ কোথায়?
+            Rewritten Question: NEW_QUES
+             
+            Reasoning:
+            - The first example the new question is directly related to the previous conversation about the Rajshahi Agricultural Extension Department, so it is rewritten to be specific.
+            - The second example is unrelated to the previous questions about the Padma Bridge, so it returns NEW_QUES.
+
+            IMPORTANT:FOR UNRELATED QUESTIONS RETRUN EXACTY: NEW_QUES 
+              
             """),
-                ("user", "Summary:\n{summary}\nNew Question: {new_q}")
-            ])
+            ("user", "Summary:\n{summary}\nNew Question: {new_q}")
+        ])
 
         self.summarize_prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a summarizer. Given a chat history with alternating questions and answers, summarize the conversation concisely."),
@@ -109,7 +127,7 @@ class BanglaRAGService:
         if not self.context_window:
             return new_question
 
-        if len(self.context_window) <= 5:
+        if len(self.context_window) <= self.summary_size:
             summary = "\n".join([f"Q: {q}\nA: {a}" for q, a, _ in self.context_window])
         else:
             summary = self._summarize_history()
@@ -145,15 +163,20 @@ class BanglaRAGService:
             return
 
         combined_passages = "\n".join([doc.page_content for doc in docs])
-        prompt = self.answer_prompt.format( question=question,
-                                            context=combined_passages,
-                                            original=original_question)
+        history = self._summarize_history() if self.context_window else ""
+
+        prompt = self.answer_prompt.format(
+            question=question,
+            context=combined_passages,
+            original=original_question,
+            history=history
+        )
 
         full_answer = ""
         for chunk in self._invoke_llm_stream(prompt):
             full_answer += chunk
             if "NOT" not in full_answer:
-                yield chunk  # stream full updated each time
+                yield chunk
 
         if "NOT" in full_answer:
             self.debug_info = f"User Question: {original_question}\nRewritten Question: {rewritten_question}\nRetrieved Context: {combined_passages}\nGiven Answer: NOT_SURE_ANSWER"
