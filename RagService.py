@@ -59,12 +59,12 @@ class BanglaRAGService:
         Guidelines:
         - Your tone should indicate that you are answering from your knowledge base. Do not speak as if the user already possesses the information (e.g., avoid phrases like "আপনার কাছে আছে"). Instead, present facts directly and neutrally.
         - Answer sufficiently and concisely.
-        - Use the context and past conversation to answer the question precisely.
         - Do not rephrase or repeat the question in your answer unnecessarily. If it is necessary to refer to the question, do so briefly.
         - Use the context provided to answer the question.
+        - Your answer should be based on the rewritten question but phrasing should be based on the original question.
         - If unsure or context is insufficient, respond exactly with 'NOT_SURE_ANSWER'.
              """),
-            ("user", "Conversation History Summary:\n{history}\n\nContext:\n{context}\n\nRewritten Question: {question}\nOriginal Question: {original}")
+            ("user", "Conversation History Summary:\nContext:\n{context}\n\nRewritten Question: {question}\nOriginal Question: {original}")
         ])
 
         self.rewrite_prompt = ChatPromptTemplate.from_messages([
@@ -168,8 +168,7 @@ class BanglaRAGService:
         prompt = self.answer_prompt.format(
             question=question,
             context=combined_passages,
-            original=original_question,
-            history=history
+            original=original_question
         )
 
         full_answer = ""
