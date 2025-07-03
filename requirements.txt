@@ -56,8 +56,8 @@ gitdb==4.0.11
 GitPython==3.1.43
 google-auth==2.34.0
 googleapis-common-protos==1.65.0
-gradio==5.29.0
-gradio_client==1.10.0
+gradio==5.35.0
+gradio_client==1.10.4
 greenlet==3.1.0
 groovy==0.1.2
 grpcio==1.66.1
