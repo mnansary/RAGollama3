@@ -1,169 +1,190 @@
-# In chatservice.py
-
 import json
-from typing import Generator, Deque, Tuple, Dict, Any, List
+import sys
+from typing import Dict, Any, Deque, Tuple, Generator
+import re
+# Use standard library deque for efficient history management
 from collections import deque
 
-# Import your existing services and prompts
+# Import all our custom components
 from core.RetriverService import RetrieverService
 from core.LLMservice import LLMService
-from core.prompts import (ANSWERING_PROMPT, 
-                          FOLLOW_UP_CHECKER_PROMPT, 
-                          REWRITER_SPECIALIST_PROMPT, 
-                          DISAMBIGUATION_PROMPT, 
-                          SUMMARIZER_PROMPT, 
-                          SUGGESTER_PROMPT)
+from core.prompts import ANALYST_PROMPT, STRATEGIST_PROMPTS
+from core.config import VECTOR_DB_PATH, MODEL_NAME,EMBEDDING_MODEL
 
-# Import configuration
-from core.config import VECTOR_DB_PATH, EMBEDDING_MODEL, MODEL_NAME
-
-class ChatService:
-    def __init__(
-        self,
-        num_passages_to_retrieve: int = 1,
-        context_window_size: int = 10,
-        summary_size: int = 5
-    ):
-        """Initializes the main chat service with a hybrid RAG strategy."""
-        self.retriever = RetrieverService(
-            vector_db_path=VECTOR_DB_PATH,
-            embedding_model_name=EMBEDDING_MODEL,
-            num_passages_to_retrieve=num_passages_to_retrieve
-        )
+class ProactiveChatService:
+    def __init__(self, history_length: int = 100):
+        # NOTE: num_passages_to_retrieve is removed from here.
+        print("Initializing ProactiveChatService...")
+        self.retriever = RetrieverService(vector_db_path=VECTOR_DB_PATH,embedding_model=EMBEDDING_MODEL) # Simplified init
         self.llm_service = LLMService(llm_model=MODEL_NAME)
-        self.context_window: Deque[Tuple[str, str]] = deque(maxlen=context_window_size)
-        self.summary_size = summary_size
+        self.history: Deque[Tuple[str, str]] = deque(maxlen=history_length)
+        print(f"✅ ProactiveChatService initialized successfully. History window: {history_length} turns.")
 
-    def _get_history_summary(self) -> str:
-        # ... (This function remains unchanged) ...
-        if not self.context_window:
-            return "No conversation history."
-        history_list = list(self.context_window)
-        return "\n".join([f"Q: {q}\nA: {a}" for q, a in history_list])
-            
-    def _generate_suggestions(self, context: str, question: str) -> List[str]:
-        # ... (This function remains unchanged but will be skipped) ...
+    def _format_history(self) -> str:
+        """Formats the conversation history into a readable string for prompts."""
+        if not self.history:
+            return "No conversation history yet."
+        return "\n".join([f"User: {user_q}\nAI: {ai_a}" for user_q, ai_a in self.history])
+
+    def _run_analyst_stage(self, user_input: str, history_str: str) -> Dict[str, Any] | None:
+        """
+        Executes the Analyst stage: gets a structured JSON plan from the LLM.
+        This version is robust against conversational text surrounding the JSON object.
+        """
+        print("\n----- 🕵️ Analyst Stage -----")
+        prompt = ANALYST_PROMPT.format(history=history_str, question=user_input)
         try:
-            prompt = SUGGESTER_PROMPT.format(context=context, question=question)
-            suggestions_str = self.llm_service.invoke(prompt)
-            return [line.split('. ', 1)[1] for line in suggestions_str.strip().split('\n') if '. ' in line]
+            response_text = self.llm_service.invoke(
+                prompt,
+                temperature=0.0,
+                max_tokens=51200
+            )
+            match = re.search(r"\{.*\}", response_text, re.DOTALL)
+            if match:
+                json_str = match.group(0)
+                plan = json.loads(json_str)
+                print("✅ Analyst plan generated and extracted successfully:")
+                #print(json.dumps(plan, indent=2))
+                return plan
+            else:
+                print(f"❌ CRITICAL: Analyst stage failed. No valid JSON block found in the response.")
+                print(f"LLM Response was: {response_text}")
+                return None
+        except json.JSONDecodeError as e:
+            print(f"❌ CRITICAL: Analyst stage failed with JSONDecodeError: {e}")
+            print(f"Problematic JSON string was: {json_str}")
+            return None
         except Exception as e:
-            print(f"Error generating suggestions: {e}")
-            return []
+            print(f"❌ CRITICAL: An unexpected error occurred in the Analyst stage: {e}")
+            return None
+                
+    def _run_retriever_stage(self, plan: Dict[str, Any]) -> Tuple[str, list]:
+        """Executes the Retriever stage based on the Analyst's detailed plan."""
+        print("\n----- 📚 Retriever Stage -----")
+        query = plan.get("query_for_retriever", "")
+        k = plan.get("k_for_retriever", 3)
+        filters = plan.get("metadata_filter", None)
+
+        if k == 0 or not query:
+            print("Skipping retrieval as per Analyst's plan.")
+            return "No retrieval was performed.", []
+
+        print(f"🔍 Querying retriever with: '{query}', k={k}, filters={filters}")
+        retrieval_results = self.retriever.retrieve(query, k=k, filters=filters)
+        retrieved_passages = retrieval_results.get("retrieved_passages", [])
+
+        if not retrieved_passages:
+            print("⚠️ Retriever found no documents.")
+            return "No information found matching the criteria.", []
+        
+        combined_context = "\n\n---\n\n".join([doc["text"] for doc in retrieved_passages])
+        print(f"✅ Retriever found {len(retrieved_passages)} documents.")
+        return combined_context, retrieved_passages
+
+    def _run_strategist_stage(self, plan: Dict[str, Any], context: str, user_input: str, history_str: str) -> Generator[str, None, None]:
+        """Executes the Strategist stage: returns a generator that streams the final response."""
+        print("\n----- 🎭 Strategist Stage -----")
+        strategy = plan.get("response_strategy", "RESPOND_WARMLY")
+        print(f"✍️ Executing strategy: '{strategy}'")
+
+        prompt_template = STRATEGIST_PROMPTS.get(strategy)
+        if not prompt_template:
+            print(f"❌ WARNING: Invalid strategy '{strategy}'. Defaulting.")
+            prompt_template = STRATEGIST_PROMPTS["RESPOND_WARMLY"]
+
+        prompt = prompt_template.format(
+            context=context,
+            question=user_input,
+            history=history_str
+        )
+        return self.llm_service.stream(
+            prompt,
+            temperature=0.0,
+            max_tokens=120000,
+            top_p=0.95,
+            repetition_penalty=1.2
+        )
 
     def chat(self, user_input: str) -> Generator[Dict[str, Any], None, None]:
-        """
-        Main chat entry point using a hybrid strategy based on conversation history.
-        """
-        history_summary = self._get_history_summary()
-        full_answer = ""
-        retrieved_passages = []
-        question_for_generation = user_input
+        """Main entry point, orchestrating the new, more robust pipeline."""
+        print(f"\n==================== NEW CHAT TURN: User said '{user_input}' ====================")
+        history_str = self._format_history()
 
-        # --- MODE 1: NEW CONVERSATION - "Retrieve First, Validate Second" ---
-        if "No conversation history" in history_summary:
-            yield {"type": "debug", "content": "Pipeline Mode: New Conversation. Strategy: Retrieve First."}
-            
-            # Step 1: Attempt direct retrieval
-            yield {"type": "debug", "content": f"Step 1: Retrieving documents for initial query: '{user_input}'..."}
-            retrieval_results = self.retriever.retrieve(user_input)
-            retrieved_passages = retrieval_results.get("retrieved_passages", [])
+        plan = self._run_analyst_stage(user_input, history_str)
+        if not plan:
+            yield {"type": "error", "content": "I'm sorry, I'm having a little trouble. Could you rephrase?"}
+            return
 
-            if not retrieved_passages:
-                yield {"type": "debug", "content": "❌ Retrieval failed. No relevant documents found."}
-                yield {"type": "error", "content": "দুঃখিত, আপনার প্রশ্নের সাথে সম্পর্কিত কোনো তথ্য খুঁজে পাওয়া যায়নি।"}
-                return
-            
-            yield {"type": "debug", "content": f"✅ Retrieval successful. Found {len(retrieved_passages)} passages. Now validating context..."}
-            combined_context = "\n\n---\n\n".join([doc["text"] for doc in retrieved_passages])
-
-            # Step 2: Attempt to generate a definitive answer
-            answer_prompt = ANSWERING_PROMPT.format(history=history_summary, context=combined_context, question=user_input)
-            full_answer = self.llm_service.invoke(answer_prompt)
-
-            # Step 3: Assess the answer. If not definitive, ask for clarification.
-            if "NOT_SURE_ANSWER" in full_answer or not full_answer.strip():
-                yield {"type": "debug", "content": "⚠️ LLM couldn't form a definitive answer. The query is likely ambiguous. Asking for clarification."}
-                disambiguation_prompt = DISAMBIGUATION_PROMPT.format(history=history_summary, question=user_input)
-                clarification_question = self.llm_service.invoke(disambiguation_prompt)
-                
-                if clarification_question != "NOT_AMBIGUOUS":
-                    yield {"type": "clarification", "content": clarification_question}
-                else:
-                    yield {"type": "error", "content": "আমি আপনার প্রশ্নটি বুঝতে পেরেছি, কিন্তু আমার কাছে এই মুহূর্তে কোনো নির্দিষ্ট উত্তর নেই।"}
-                return
-            
-            # If the answer is definitive, stream it
-            for chunk in full_answer:
-                yield {"type": "answer_chunk", "content": chunk}
-
-        # --- MODE 2: ONGOING CONVERSATION - Now with 2-Step Logic ---
-        else:
-            yield {"type": "debug", "content": "Pipeline Mode: Ongoing Conversation. Strategy: Decide, then Rewrite."}
-            
-            # Create the history string once
-            raw_history = "\n".join([f"Q: {q}\nA: {a}" for q, a in self.context_window])
-            
-            # --- Step 2a: The Gatekeeper ---
-            yield {"type": "debug", "content": "Step 1: Checking if question is a follow-up..."}
-            checker_prompt = FOLLOW_UP_CHECKER_PROMPT.format(history=raw_history, new_question=user_input)
-            decision = self.llm_service.invoke(checker_prompt)
-
-            # --- Step 2b: The Decision ---
-            if decision == "FOLLOW_UP":
-                yield {"type": "debug", "content": "✅ Follow-up detected. Calling specialist rewriter..."}
-                
-                # Call the specialist rewriter prompt
-                rewriter_prompt = REWRITER_SPECIALIST_PROMPT.format(history=raw_history, new_question=user_input)
-                rewritten_question = self.llm_service.invoke(rewriter_prompt)
-                
-                question_for_retrieval = rewritten_question
-                yield {"type": "debug", "content": f"✅ Rewritten question: '{question_for_retrieval}'"}
-            else: # Decision is NEW_TOPIC
-                question_for_retrieval = user_input
-                yield {"type": "debug", "content": "✅ New topic detected. Clearing conversation history."}
-                self.context_window.clear()
-            
-            question_for_generation = question_for_retrieval
-
-            # --- The rest of the pipeline continues as before ---
-            yield {"type": "debug", "content": "Step 2: Retrieving documents..."}
-            retrieval_results = self.retriever.retrieve(question_for_retrieval)
-            retrieved_passages = retrieval_results.get("retrieved_passages", [])
-
-            if not retrieved_passages:
-                yield {"type": "debug", "content": "❌ Retrieval failed."}
-                yield {"type": "error", "content": "দুঃখিত, এই সম্পর্কিত কোনো তথ্য খুঁজে পাওয়া যায়নি।"}
-                return
-            
-            yield {"type": "debug", "content": f"✅ Retrieval successful. Found {len(retrieved_passages)} passages."}
-            combined_context = "\n\n---\n\n".join([doc["text"] for doc in retrieved_passages])
-
-            yield {"type": "debug", "content": "Step 3: Generating answer..."}
-            answer_prompt = ANSWERING_PROMPT.format(history=history_summary, context=combined_context, question=question_for_retrieval)
-            
-            for chunk in self.llm_service.stream(answer_prompt):
-                if "NOT_SURE_ANSWER" in full_answer + chunk: break
-                full_answer += chunk
-                yield {"type": "answer_chunk", "content": chunk}
-
-            if "NOT_SURE_ANSWER" in full_answer or not full_answer.strip():
-                 yield {"type": "debug", "content": "❌ LLM could not answer from context."}
-                 yield {"type": "error", "content": "দুঃখিত, এই বিষয়টি সম্পর্কে আমার কাছে কোনো নির্দিষ্ট তথ্য নেই।"}
-                 return
+        combined_context, retrieved_passages = self._run_retriever_stage(plan)
         
-        # --- COMMON FINAL STEPS ---
-        yield {"type": "debug", "content": "✅ Answer generation complete."}
+        answer_generator = self._run_strategist_stage(plan, combined_context, user_input, history_str)
         
-        # Post-Generation: Citations and Suggestions
-        sources = list(set([doc["url"] for doc in retrieved_passages if doc.get("url")]))
+        full_answer_list = []
+        for chunk in answer_generator:
+            full_answer_list.append(chunk)
+            yield {
+                "type": "answer_chunk",
+                "content": chunk
+            }
         
-        # *** NEW LOGIC: Suggestions are now skipped ***
-        yield {"type": "debug", "content": "Skipping follow-up suggestions as per configuration."}
-        suggestions = []
+        final_answer = "".join(full_answer_list).strip()
+        self.history.append((user_input, final_answer))
 
-        # Update State & Yield Final Payload
-        # Use full_answer which was accumulated during the streaming loop
-        self.context_window.append((user_input, full_answer))
-        final_payload = {"sources": sources, "suggested_questions": suggestions}
-        yield {"type": "final_data", "content": final_payload}
+        # --- START OF THE FIX ---
+        sources = []
+        if retrieved_passages:
+            # Use a set to automatically handle duplicates, then convert to a list
+            unique_urls = set()
+            for doc in retrieved_passages:
+                # Safely get the metadata and then the URL
+                if doc.get("metadata") and doc["metadata"].get("url"):
+                    unique_urls.add(doc["metadata"]["url"])
+            sources = list(unique_urls)
+        print(sources)
+        # --- END OF THE FIX ---
+
+        yield {
+            "type": "final_data",
+            # Use the Bengali key "তথ্যসূত্র" as intended
+            "content": {"sources": sources}
+        }
+        print("\n-------------------- STREAM COMPLETE --------------------")
+
+if __name__ == "__main__":
+    # 1. Initialize the service
+    chat_service = ProactiveChatService(history_length=5)
+
+    # 2. Define test cases
+    test_conversation = [
+        "জন্ম নিবন্ধন করার প্রক্রিয়া কি?",
+        "বিআরটিএ অফিসের ফোন নাম্বার কি?",
+        "আপনি কি আমার হয়ে একটি আবেদনপত্র পূরণ করে দিতে পারবেন?",
+        "আচ্ছা, বাংলাদেশের বর্তমান প্রধানমন্ত্রীর নাম কি?",
+    ]
+
+    # 3. Loop through the conversation and process each turn
+    for turn in test_conversation:
+        print(f"\n\n\n>>>>>>>>>>>>>>>>>> User Input: {turn} <<<<<<<<<<<<<<<<<<")
+        print("\n<<<<<<<<<<<<<<<<<< Bot Response >>>>>>>>>>>>>>>>>>")
+
+        final_sources = []
+        try:
+            # The client code iterates through the generator yielded by chat()
+            for event in chat_service.chat(turn):
+                if event["type"] == "answer_chunk":
+                    # Print each chunk as it arrives to simulate a streaming UI
+                    print(event["content"], end="", flush=True)
+                elif event["type"] == "final_data":
+                    # Capture the sources from the final event
+                    final_sources = event["content"].get("তথ্যসূত্র", [])
+                elif event["type"] == "error":
+                    print(event["content"], end="", flush=True)
+            
+            # After the stream is complete, print the sources if any were found
+            if final_sources:
+                print(f"\n\n[তথ্যসূত্র: {', '.join(final_sources)}]")
+
+        except Exception as e:
+            print(f"\n\nAn unexpected error occurred: {e}")
+
+        print("\n<<<<<<<<<<<<<<<<<< End of Response >>>>>>>>>>>>>>>>>>")
