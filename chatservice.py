@@ -1,22 +1,25 @@
 import json
-import sys
+import os
 from typing import Dict, Any, Deque, Tuple, Generator
 import re
 # Use standard library deque for efficient history management
 from collections import deque
-
+from dotenv import load_dotenv
 # Import all our custom components
 from core.RetriverService import RetrieverService
 from core.LLMservice import LLMService
 from core.prompts import ANALYST_PROMPT, STRATEGIST_PROMPTS
-from core.config import VECTOR_DB_PATH, MODEL_NAME,EMBEDDING_MODEL
-
+from core.config import VECTOR_DB_PATH, EMBEDDING_MODEL
+load_dotenv()
 class ProactiveChatService:
     def __init__(self, history_length: int = 100):
         # NOTE: num_passages_to_retrieve is removed from here.
         print("Initializing ProactiveChatService...")
         self.retriever = RetrieverService(vector_db_path=VECTOR_DB_PATH,embedding_model=EMBEDDING_MODEL) # Simplified init
-        self.llm_service = LLMService(llm_model=MODEL_NAME)
+        base_url = os.getenv("LLM_MODEL_BASE_URL")
+        api_key = os.getenv("LLM_MODEL_API_KEY")
+        model_name=os.getenv("LLM_MODEL_NAME")
+        self.llm_service = LLMService(api_key=api_key,base_url=base_url,model=model_name)
         self.history: Deque[Tuple[str, str]] = deque(maxlen=history_length)
         print(f"✅ ProactiveChatService initialized successfully. History window: {history_length} turns.")
 
@@ -37,7 +40,7 @@ class ProactiveChatService:
             response_text = self.llm_service.invoke(
                 prompt,
                 temperature=0.0,
-                max_tokens=51200
+                max_tokens=8192
             )
             match = re.search(r"\{.*\}", response_text, re.DOTALL)
             if match:
@@ -62,7 +65,7 @@ class ProactiveChatService:
         """Executes the Retriever stage based on the Analyst's detailed plan."""
         print("\n----- 📚 Retriever Stage -----")
         query = plan.get("query_for_retriever", "")
-        k = plan.get("k_for_retriever", 3)
+        k = plan.get("k_for_retriever", 1)
         filters = plan.get("metadata_filter", None)
 
         if k == 0 or not query:
@@ -100,8 +103,7 @@ class ProactiveChatService:
         return self.llm_service.stream(
             prompt,
             temperature=0.0,
-            max_tokens=120000,
-            top_p=0.95,
+            max_tokens=8192,
             repetition_penalty=1.2
         )
 

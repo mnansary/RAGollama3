@@ -90,4 +90,4 @@ demo = gr.ChatInterface(
 
 if __name__ == "__main__":
     # Launch the Gradio app with an in-browser link and optional sharing.
-    demo.launch(share=True,server_name="0.0.0.0")
+    demo.launch(share=True,server_name="0.0.0.0",server_port=3032)
